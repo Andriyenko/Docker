@@ -1,0 +1,89 @@
+#update 
+sudo yum check-update
+# add repo
+curl -fsSL https://get.docker.com/ | sh
+# enable and start deamon 
+systemctl start docker
+sudo systemctl enable docker
+
+# Open ports in firewalld
+#162/UDP port (SNMP traps), 
+##Zabbix server instance exposes the 10051/TCP port (Zabbix trapper) to host machine.
+#Zabbix web interface instance exposes the 443/TCP port (HTTPS) to host machine.
+#Directory /etc/ssl/nginx must contain certificate with required name.
+ firewall-cmd --permanent --zone=public --add-port=2375/tcp
+ firewall-cmd --permanent --zone=public --add-port=443/tcp
+ firewall-cmd --permanent --zone=public --add-port=80/tcp
+ firewall-cmd --permanent --zone=public --add-port=161/tcp
+ firewall-cmd --permanent --zone=public --add-port=10051/tcp
+ firewall-cmd --permanent --zone=public --add-port=162/tcp
+ firewall-cmd --permanent --zone=public --add-port=9000/tcp
+ firewall-cmd --permanent --zone=public --add-port=5432/tcp
+ firewall-cmd --zone=public --list-ports
+ firewall-cmd --zone=public --add-service=https
+ firewall-cmd --reload
+# 
+#Start empty PostgreSQL server instance
+docker volume create --name pg-data
+docker volume create --name pg-run
+docker run --name postgres-server -t --restart always \
+      -e POSTGRES_USER="zabbix" \
+      -e POSTGRES_PASSWORD="password" \
+      -e POSTGRES_DB="zabbix_db" \
+      -v pg-data:/var/lib/postgresql/data \
+      -v pg-run:/run/postgresql \
+      -p 5432:5432 \
+      -d postgres:latest
+#Start Zabbix snmptraps instance
+docker volume create --name snmptraps
+docker volume create --name snmptraps-mibs
+docker volume create --name snmptraps-mibs-var
+docker run --name zabbix-snmptraps -t \
+      -v snmptraps:/var/lib/zabbix/snmptraps:rw \
+      -v snmptraps-mibs:/usr/share/snmp/mibs:ro \
+      -v snmptraps-mibs-var:/var/lib/zabbix/mibs \
+      -p 162:162/udp \
+      -d zabbix/zabbix-snmptraps:latest
+# Zabbix-server # Start Zabbix server instance and link the instance with created PostgreSQL server instance
+docker volume create --name zabbix-alertscripts
+docker volume create --name zabbix-externalscripts
+docker volume create --name zabbix-enc
+docker volume create --name zabbix-modules
+docker volume create --name zabbix-ssh_keys
+docker volume create --name zabbix-certs
+docker volume create --name zabbix-keys
+docker volume create --name zabbix-ssl_ca
+docker volume create --name zabbix-snmptraps
+docker volume create --name zabbix-mibs
+docker run --name zabbix-server-pgsql --restart always \
+ -v zabbix-alertscripts:/usr/lib/zabbix/alertscripts \
+ -v zabbix-externalscripts:/usr/lib/zabbix/externalscripts \
+ -v zabbix-enc:/var/lib/zabbix/enc \
+ -v zabbix-modules:/var/lib/zabbix/modules \
+ -v zabbix-ssh_keys:/var/lib/zabbix/ssh_keys \
+ -v zabbix-certs:/var/lib/zabbix/ssl/certs \
+ -v zabbix-keys:/var/lib/zabbix/ssl/keys \
+ -v zabbix-ssl_ca:/var/lib/zabbix/ssl/ssl_ca \
+ -v zabbix-snmptraps:/var/lib/zabbix/snmptraps \
+ -v zabbix-mibs:/var/lib/zabbix/mibs \
+ --volumes-from zabbix-snmptraps \
+ -p 10051:10051 -p 10050:10050\
+ -e DB_SERVER_HOST="ip" \
+ -e POSTGRES_USER="zabbix" \
+ -e POSTGRES_PASSWORD="password" \
+ -e POSTGRES_DB="zabbix_db" \
+ -e ZBX_ENABLE_SNMP_TRAPS="true" \
+ --link postgres-server:postgres \
+ -d zabbix/zabbix-server-pgsql:latest
+#Start Zabbix web interface and link the instance with created PostgreSQL server and Zabbix server instances
+docker volume create --name zabbix-web-nginx-pgsql
+docker run --name zabbix-web-nginx-pgsql -t --restart always \
+      -e DB_SERVER_HOST="ip" \
+      -e POSTGRES_USER="zabbix" \
+      -e POSTGRES_PASSWORD="password" \
+      -e POSTGRES_DB="zabbix_db" \
+      --link postgres-server:postgres \
+      --link zabbix-server-pgsql:zabbix-server \
+      -v zabbix-web-nginx:/etc/ssl/nginx \
+      -p 80:80 \
+      -d zabbix/zabbix-web-nginx-pgsql:latest
